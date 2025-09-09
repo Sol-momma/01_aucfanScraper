@@ -63,12 +63,12 @@ function getAucfanDataFromSheetOrUrl_(sheet, urlRow, urlCol) {
 }
 
 
-// ===== 商品ランク機能 =====
+// ===== 商品ランク機能（Aucfan専用・プレフィックス付きで衝突回避） =====
 
 /**
- * Phase 1: 商品状態のテキストを抽出する関数
- * @param {string} htmlBlock - 商品ブロックのHTML
- * @return {string} 商品状態のテキスト（例: "中古", "目立った傷や汚れなし"）
+ * Phase 1: 商品状態のテキストを抽出
+ * @param {string} htmlBlock 商品ブロックのHTML
+ * @returns {string} 商品状態テキスト（例: "中古", "目立った傷や汚れなし"）
  */
 function auc_extractConditionText_(htmlBlock) {
   // ヤフオクパターン: "商品状態 中古" のような形式
@@ -100,9 +100,9 @@ function auc_extractConditionText_(htmlBlock) {
 }
 
 /**
- * Phase 2: サイト種別を判定する関数  
- * @param {string} htmlBlock - 商品ブロックのHTML
- * @return {string} サイト名（"yahoo" または "mercari"）
+ * Phase 2: サイト種別を判定
+ * @param {string} htmlBlock 商品ブロックのHTML
+ * @returns {string} サイト（"yahoo" | "mercari"）
  */
 function auc_detectSiteType_(htmlBlock) {
   // ヤフオクの特徴を探す
@@ -126,9 +126,7 @@ function auc_detectSiteType_(htmlBlock) {
 
 // ===== Phase 3: ランク変換機能 =====
 
-/**
- * Phase 3: ヤフオク商品状態とランクのマッピング定義
- */
+/** Phase 3: ヤフオク商品状態→ランク マッピング */
 const AUC_YAHOO_CONDITION_RANK_MAP = {
   '新品': 'S',
   '未使用': 'S', 
@@ -140,9 +138,7 @@ const AUC_YAHOO_CONDITION_RANK_MAP = {
   '全体的に状態が悪い': 'D'
 };
 
-/**
- * Phase 3: メルカリ商品状態とランクのマッピング定義
- */
+/** Phase 3: メルカリ商品状態→ランク マッピング */
 const AUC_MERCARI_CONDITION_RANK_MAP = {
   '新品、未使用': 'S',
   '未使用に近い': 'SA',
@@ -154,8 +150,8 @@ const AUC_MERCARI_CONDITION_RANK_MAP = {
 
 /**
  * Phase 3: ヤフオクの商品状態をランクに変換
- * @param {string} conditionText - 商品状態テキスト
- * @return {string} ランク（S, SA, A, B, C, D）
+ * @param {string} conditionText 商品状態テキスト
+ * @returns {string} ランク（S|SA|A|B|C|D）
  */
 function auc_convertYahooConditionToRank_(conditionText) {
   if (!conditionText) return "";
@@ -178,8 +174,8 @@ function auc_convertYahooConditionToRank_(conditionText) {
 
 /**
  * Phase 3: メルカリの商品状態をランクに変換
- * @param {string} conditionText - 商品状態テキスト  
- * @return {string} ランク（S, SA, A, B, C, D）
+ * @param {string} conditionText 商品状態テキスト
+ * @returns {string} ランク（S|SA|A|B|C|D）
  */
 function auc_convertMercariConditionToRank_(conditionText) {
   if (!conditionText) return "";
@@ -202,9 +198,9 @@ function auc_convertMercariConditionToRank_(conditionText) {
 
 /**
  * Phase 3: 統一ランク変換関数（メイン）
- * @param {string} conditionText - 商品状態テキスト
- * @param {string} siteType - サイト種別
- * @return {string} ランク
+ * @param {string} conditionText 商品状態テキスト
+ * @param {string} siteType サイト種別
+ * @returns {string} ランク
  */
 function auc_convertConditionToRank_(conditionText, siteType) {
   if (!conditionText) return "";
@@ -498,33 +494,7 @@ function testAucfanConvertConditionToRank() {
   }
 }
 
-/**
- * デバッグ用テスト関数
- */
-function debugRankConversion() {
-  console.log("=== デバッグ：ランク変換テスト ===");
-  
-  // 直接マッピングをテスト
-  console.log("1. マッピング定義の確認:");
-  console.log("AUC_YAHOO_CONDITION_RANK_MAP['新品']:", AUC_YAHOO_CONDITION_RANK_MAP['新品']);
-  console.log("AUC_YAHOO_CONDITION_RANK_MAP['中古']:", AUC_YAHOO_CONDITION_RANK_MAP['中古']);
-  
-  // 関数を直接テスト
-  console.log("\n2. Yahoo変換関数のテスト:");
-  const yahooResult1 = auc_convertYahooConditionToRank_('新品');
-  console.log("convertYahooConditionToRank_('新品'):", yahooResult1);
-  
-  const yahooResult2 = auc_convertYahooConditionToRank_('中古');
-  console.log("convertYahooConditionToRank_('中古'):", yahooResult2);
-  
-  // 統一関数をテスト
-  console.log("\n3. 統一変換関数のテスト:");
-  const unifiedResult1 = auc_convertConditionToRank_('新品', 'yahoo');
-  console.log("convertConditionToRank_('新品', 'yahoo'):", unifiedResult1);
-  
-  const unifiedResult2 = auc_convertConditionToRank_('中古', 'yahoo');
-  console.log("convertConditionToRank_('中古', 'yahoo'):", unifiedResult2);
-}
+// （内部検証用のデバッグ関数は削除しました）
 
 /**
  * オークファンHTML読み取りテスト関数
@@ -586,17 +556,17 @@ function testAucfanHtmlFromSheet() {
  * 🎯 統合テスト：全Phase機能の動作確認
  */
 function testAucfanAllRankFeatures() {
-  console.log("🎯 ===== ランク機能 統合テスト ===== 🎯");
+  console.log("===== ランク機能 統合テスト =====");
   
-  console.log("\n📋 Phase 1: 商品状態抽出テスト");
+  console.log("\nPhase 1: 商品状態抽出テスト");
   testAucfanExtractConditionText();
   
-  console.log("\n📋 Phase 2: サイト判定テスト");
+  console.log("\nPhase 2: サイト判定テスト");
   testAucfanDetectSiteType();
   
-  console.log("\n📋 Phase 3: ランク変換テスト");
+  console.log("\nPhase 3: ランク変換テスト");
   testAucfanConvertConditionToRank();
   
-  console.log("\n🎉 全てのPhaseのテストが完了しました！");
-  console.log("実際のデータでテストするには testAucfanHtmlFromSheet() を実行してください。");
+  console.log("\n全てのPhaseのテストが完了しました。");
+  console.log("実データでの確認: testAucfanHtmlFromSheet() を実行。");
 }
