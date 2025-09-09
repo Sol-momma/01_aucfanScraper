@@ -130,12 +130,19 @@ function auc_detectSiteType_(htmlBlock) {
 const AUC_YAHOO_CONDITION_RANK_MAP = {
   '新品': 'S',
   '未使用': 'S', 
+  '新品未使用': 'S',
+  '未使用未開封': 'S',
+  '新同': 'SA',
   '未使用に近い': 'SA',
+  '極美品': 'SA',
+  '美品': 'A',
   '目立った傷や汚れなし': 'A',
   'やや傷や汚れあり': 'B',
   '傷や汚れあり': 'C',
   '中古': 'B',  // デフォルト
-  '全体的に状態が悪い': 'D'
+  '全体的に状態が悪い': 'D',
+  '訳あり': 'C',
+  'ジャンク': 'D'
 };
 
 /** Phase 3: メルカリ商品状態→ランク マッピング */
@@ -203,7 +210,7 @@ function auc_convertMercariConditionToRank_(conditionText) {
  * @returns {string} ランク
  */
 function auc_convertConditionToRank_(conditionText, siteType) {
-  if (!conditionText) return "";
+  if (!conditionText) return "B"; // デフォルトはB
   
   let map;
   if (siteType === "mercari") {
@@ -376,8 +383,8 @@ function parseAucfanFromHtml_(html) {
 
     // 🆕 商品状態抽出とランク変換
     const conditionText = auc_extractConditionText_(block);
-    const siteType = auc_detectSiteType_(block);  
-    const rank = auc_convertConditionToRank_(conditionText, siteType);
+    const siteType = auc_detectSiteType_(block);
+    const rank = auc_convertConditionToRank_(conditionText, siteType) || "B";
 
     if (detailUrl || imageUrl || price || endTxt || title) {
       items.push(
