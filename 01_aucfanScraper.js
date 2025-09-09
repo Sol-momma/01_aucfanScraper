@@ -21,6 +21,218 @@ function fetchAucfanHtml_(url) {
 }
 
 /**
+ * オークファンデータを取得（HTMLまたはURLから）
+ */
+function getAucfanDataFromSheetOrUrl_(sheet, urlRow, urlCol) {
+  try {
+    // まず67行目以降にHTMLがあるかチェック
+    var htmlFromSheet = readHtmlFromRow_(sheet, 67);
+
+    if (htmlFromSheet) {
+      // HTMLソースがオークファンかどうかを判定
+      var source = detectSource_(htmlFromSheet);
+      if (source === "オークファン" || source === "aucfan") {
+        console.log("67行目以降のHTMLからオークファンデータを取得します");
+        var items = parseAucfanFromHtml_(htmlFromSheet);
+        console.log("オークファンデータを取得しました:", items.length + "件");
+        return items;
+      } else {
+        console.log("67行目以降のHTMLはオークファンではありません:", source);
+      }
+    }
+
+    // HTMLがない場合はURLから取得を試行
+    var url = sheet.getRange(urlRow || 110, urlCol || 2).getValue();
+    if (url && url.toString().trim()) {
+      var urlStr = url.toString().trim();
+      if (urlStr.startsWith("http")) {
+        console.log("URLからオークファンデータを取得します:", urlStr);
+        var html = fetchAucfanHtml_(urlStr);
+        var items = parseAucfanFromHtml_(html);
+        console.log("オークファンデータを取得しました:", items.length + "件");
+        return items;
+      }
+    }
+
+    console.log("オークファンのHTMLもURLも見つかりません");
+    return [];
+  } catch (e) {
+    console.warn("オークファンデータの取得に失敗:", e.message);
+    return [];
+  }
+}
+
+
+// ===== 商品ランク機能 =====
+
+/**
+ * Phase 1: 商品状態のテキストを抽出する関数
+ * @param {string} htmlBlock - 商品ブロックのHTML
+ * @return {string} 商品状態のテキスト（例: "中古", "目立った傷や汚れなし"）
+ */
+function auc_extractConditionText_(htmlBlock) {
+  // ヤフオクパターン: "商品状態 中古" のような形式
+  const yahooPattern = /商品状態[：:\s]*([^<\n]+)/i;
+  const yahooMatch = htmlBlock.match(yahooPattern);
+  if (yahooMatch) {
+    return yahooMatch[1].trim();
+  }
+  
+  // メルカリパターン: 状態を直接記載
+  const mercariPatterns = [
+    /新品、未使用/i,
+    /未使用に近い/i,
+    /目立った傷や汚れなし/i,
+    /やや傷や汚れあり/i,
+    /傷や汚れあり/i,
+    /全体的に状態が悪い/i
+  ];
+  
+  for (let pattern of mercariPatterns) {
+    const match = htmlBlock.match(pattern);
+    if (match) {
+      return match[0];
+    }
+  }
+  
+  // 何も見つからない場合
+  return "";
+}
+
+/**
+ * Phase 2: サイト種別を判定する関数  
+ * @param {string} htmlBlock - 商品ブロックのHTML
+ * @return {string} サイト名（"yahoo" または "mercari"）
+ */
+function auc_detectSiteType_(htmlBlock) {
+  // ヤフオクの特徴を探す
+  if (htmlBlock.includes('yahoo') || 
+      htmlBlock.includes('aucfan') || 
+      htmlBlock.includes('商品状態') ||
+      htmlBlock.includes('ヤフオク')) {
+    return "yahoo";
+  }
+  
+  // メルカリの特徴を探す
+  if (htmlBlock.includes('mercari') || 
+      htmlBlock.includes('メルカリ') ||
+      htmlBlock.includes('フリマ')) {
+    return "mercari";
+  }
+  
+  // デフォルト（分からない場合はヤフオクとして扱う）
+  return "yahoo";
+}
+
+// ===== Phase 3: ランク変換機能 =====
+
+/**
+ * Phase 3: ヤフオク商品状態とランクのマッピング定義
+ */
+const AUC_YAHOO_CONDITION_RANK_MAP = {
+  '新品': 'S',
+  '未使用': 'S', 
+  '未使用に近い': 'SA',
+  '目立った傷や汚れなし': 'A',
+  'やや傷や汚れあり': 'B',
+  '傷や汚れあり': 'C',
+  '中古': 'B',  // デフォルト
+  '全体的に状態が悪い': 'D'
+};
+
+/**
+ * Phase 3: メルカリ商品状態とランクのマッピング定義
+ */
+const AUC_MERCARI_CONDITION_RANK_MAP = {
+  '新品、未使用': 'S',
+  '未使用に近い': 'SA',
+  '目立った傷や汚れなし': 'A', 
+  'やや傷や汚れあり': 'B',
+  '傷や汚れあり': 'C',
+  '全体的に状態が悪い': 'D'
+};
+
+/**
+ * Phase 3: ヤフオクの商品状態をランクに変換
+ * @param {string} conditionText - 商品状態テキスト
+ * @return {string} ランク（S, SA, A, B, C, D）
+ */
+function auc_convertYahooConditionToRank_(conditionText) {
+  if (!conditionText) return "";
+  
+  // 完全一致を試す
+  if (AUC_YAHOO_CONDITION_RANK_MAP[conditionText]) {
+    return AUC_YAHOO_CONDITION_RANK_MAP[conditionText];
+  }
+  
+  // 部分一致を試す
+  for (let condition in AUC_YAHOO_CONDITION_RANK_MAP) {
+    if (conditionText.includes(condition)) {
+      return AUC_YAHOO_CONDITION_RANK_MAP[condition];
+    }
+  }
+  
+  // 何も一致しない場合はデフォルト
+  return "B";
+}
+
+/**
+ * Phase 3: メルカリの商品状態をランクに変換
+ * @param {string} conditionText - 商品状態テキスト  
+ * @return {string} ランク（S, SA, A, B, C, D）
+ */
+function auc_convertMercariConditionToRank_(conditionText) {
+  if (!conditionText) return "";
+  
+  // 完全一致を試す
+  if (AUC_MERCARI_CONDITION_RANK_MAP[conditionText]) {
+    return AUC_MERCARI_CONDITION_RANK_MAP[conditionText];
+  }
+  
+  // 部分一致を試す
+  for (let condition in AUC_MERCARI_CONDITION_RANK_MAP) {
+    if (conditionText.includes(condition)) {
+      return AUC_MERCARI_CONDITION_RANK_MAP[condition];
+    }
+  }
+  
+  // 何も一致しない場合はデフォルト
+  return "B";
+}
+
+/**
+ * Phase 3: 統一ランク変換関数（メイン）
+ * @param {string} conditionText - 商品状態テキスト
+ * @param {string} siteType - サイト種別
+ * @return {string} ランク
+ */
+function auc_convertConditionToRank_(conditionText, siteType) {
+  if (!conditionText) return "";
+  
+  let map;
+  if (siteType === "mercari") {
+    map = AUC_MERCARI_CONDITION_RANK_MAP;
+  } else {
+    map = AUC_YAHOO_CONDITION_RANK_MAP;
+  }
+  
+  // 完全一致を試す
+  if (map[conditionText]) {
+    return map[conditionText];
+  }
+  
+  // 部分一致を試す
+  for (let condition in map) {
+    if (conditionText.includes(condition)) {
+      return map[condition];
+    }
+  }
+  
+  // 何も一致しない場合はデフォルト
+  return "B";
+}
+
+/**
  * オークファンのHTMLをパースして商品情報を抽出
  */
 function parseAucfanFromHtml_(html) {
@@ -166,6 +378,11 @@ function parseAucfanFromHtml_(html) {
     // 終了日
     const endTxt = firstMatch_(block, /<li class="end">\s*([^<]+)/i);
 
+    // 🆕 商品状態抽出とランク変換
+    const conditionText = auc_extractConditionText_(block);
+    const siteType = auc_detectSiteType_(block);  
+    const rank = auc_convertConditionToRank_(conditionText, siteType);
+
     if (detailUrl || imageUrl || price || endTxt || title) {
       items.push(
         createItemData_({
@@ -173,7 +390,7 @@ function parseAucfanFromHtml_(html) {
           detailUrl: detailUrl,
           imageUrl: imageUrl,
           date: endTxt || "",
-          rank: "",
+          rank: rank, // 🆕 ここが変わる！
           price: price || "",
           shop: "",
           source: "オークファン",
@@ -186,99 +403,12 @@ function parseAucfanFromHtml_(html) {
   return items;
 }
 
-/**
- * オークファンデータを取得（HTMLまたはURLから）
- */
-function getAucfanDataFromSheetOrUrl_(sheet, urlRow, urlCol) {
-  try {
-    // まず67行目以降にHTMLがあるかチェック
-    var htmlFromSheet = readHtmlFromRow_(sheet, 67);
-
-    if (htmlFromSheet) {
-      // HTMLソースがオークファンかどうかを判定
-      var source = detectSource_(htmlFromSheet);
-      if (source === "オークファン" || source === "aucfan") {
-        console.log("67行目以降のHTMLからオークファンデータを取得します");
-        var items = parseAucfanFromHtml_(htmlFromSheet);
-        console.log("オークファンデータを取得しました:", items.length + "件");
-        return items;
-      } else {
-        console.log("67行目以降のHTMLはオークファンではありません:", source);
-      }
-    }
-
-    // HTMLがない場合はURLから取得を試行
-    var url = sheet.getRange(urlRow || 110, urlCol || 2).getValue();
-    if (url && url.toString().trim()) {
-      var urlStr = url.toString().trim();
-      if (urlStr.startsWith("http")) {
-        console.log("URLからオークファンデータを取得します:", urlStr);
-        var html = fetchAucfanHtml_(urlStr);
-        var items = parseAucfanFromHtml_(html);
-        console.log("オークファンデータを取得しました:", items.length + "件");
-        return items;
-      }
-    }
-
-    console.log("オークファンのHTMLもURLも見つかりません");
-    return [];
-  } catch (e) {
-    console.warn("オークファンデータの取得に失敗:", e.message);
-    return [];
-  }
-}
-
-/**
- * Multiplies an input value by 2.
- * @param {number} input The number to double.
- * @return The input multiplied by 2.
- * @customfunction
-*/
-function DOUBLE(input) {
-  return input * 2;
-}
-
-
-  // ===== ランク機能 =====
-
-/**
- * 商品状態のテキストを抽出する関数
- * @param {string} htmlBlock - 商品ブロックのHTML
- * @return {string} 商品状態のテキスト（例: "中古", "目立った傷や汚れなし"）
- */
-function extractConditionText_(htmlBlock) {
-  // ヤフオクパターン: "商品状態 中古" のような形式
-  const yahooPattern = /商品状態[：:\s]*([^<\n]+)/i;
-  const yahooMatch = htmlBlock.match(yahooPattern);
-  if (yahooMatch) {
-    return yahooMatch[1].trim();
-  }
-  
-  // メルカリパターン: 状態を直接記載
-  const mercariPatterns = [
-    /新品、未使用/i,
-    /未使用に近い/i,
-    /目立った傷や汚れなし/i,
-    /やや傷や汚れあり/i,
-    /傷や汚れあり/i,
-    /全体的に状態が悪い/i
-  ];
-  
-  for (let pattern of mercariPatterns) {
-    const match = htmlBlock.match(pattern);
-    if (match) {
-      return match[0];
-    }
-  }
-  
-  // 何も見つからない場合
-  return "";
-}
+// ===== テスト関数 =====
 
 /**
  * Phase 1のテスト関数
  */
-function testExtractConditionText() {
+function testAucfanExtractConditionText() {
   console.log("=== Phase 1: 商品状態抽出テスト ===");
   
   // テストケース
@@ -293,7 +423,7 @@ function testExtractConditionText() {
   
   for (let i = 0; i < testCases.length; i++) {
     const testCase = testCases[i];
-    const result = extractConditionText_(testCase.html);
+    const result = auc_extractConditionText_(testCase.html);
     
     console.log(`テスト${i + 1}:`);
     console.log(`  入力: "${testCase.html}"`);
@@ -304,37 +434,10 @@ function testExtractConditionText() {
   }
 }
 
-
-
-/**
- * サイト種別を判定する関数  
- * @param {string} htmlBlock - 商品ブロックのHTML
- * @return {string} サイト名（"yahoo" または "mercari"）
- */
-function detectSiteType_(htmlBlock) {
-  // ヤフオクの特徴を探す
-  if (htmlBlock.includes('yahoo') || 
-      htmlBlock.includes('aucfan') || 
-      htmlBlock.includes('商品状態') ||
-      htmlBlock.includes('ヤフオク')) {
-    return "yahoo";
-  }
-  
-  // メルカリの特徴を探す
-  if (htmlBlock.includes('mercari') || 
-      htmlBlock.includes('メルカリ') ||
-      htmlBlock.includes('フリマ')) {
-    return "mercari";
-  }
-  
-  // デフォルト（分からない場合はヤフオクとして扱う）
-  return "yahoo";
-}
-
 /**
  * Phase 2のテスト関数
  */
-function testDetectSiteType() {
+function testAucfanDetectSiteType() {
   console.log("=== Phase 2: サイト判定テスト ===");
   
   // テストケース
@@ -348,7 +451,7 @@ function testDetectSiteType() {
   
   for (let i = 0; i < testCases.length; i++) {
     const testCase = testCases[i];
-    const result = detectSiteType_(testCase.html);
+    const result = auc_detectSiteType_(testCase.html);
     
     console.log(`テスト${i + 1}:`);
     console.log(`  入力: "${testCase.html}"`);
@@ -359,100 +462,10 @@ function testDetectSiteType() {
   }
 }
 
-// ===== Phase 3: ランク変換機能 =====
-
-/**
- * ヤフオク商品状態とランクのマッピング定義
- */
-const YAHOO_CONDITION_RANK_MAP = {
-  '新品': 'S',
-  '未使用': 'S', 
-  '未使用に近い': 'SA',
-  '目立った傷や汚れなし': 'A',
-  'やや傷や汚れあり': 'B',
-  '傷や汚れあり': 'C',
-  '中古': 'B',  // デフォルト
-  '全体的に状態が悪い': 'D'
-};
-
-/**
- * メルカリ商品状態とランクのマッピング定義
- */
-const MERCARI_CONDITION_RANK_MAP = {
-  '新品、未使用': 'S',
-  '未使用に近い': 'SA',
-  '目立った傷や汚れなし': 'A', 
-  'やや傷や汚れあり': 'B',
-  '傷や汚れあり': 'C',
-  '全体的に状態が悪い': 'D'
-};
-
-/**
- * ヤフオクの商品状態をランクに変換
- * @param {string} conditionText - 商品状態テキスト
- * @return {string} ランク（S, SA, A, B, C, D）
- */
-function convertYahooConditionToRank_(conditionText) {
-  if (!conditionText) return "";
-  
-  // 完全一致を試す
-  if (YAHOO_CONDITION_RANK_MAP[conditionText]) {
-    return YAHOO_CONDITION_RANK_MAP[conditionText];
-  }
-  
-  // 部分一致を試す
-  for (let condition in YAHOO_CONDITION_RANK_MAP) {
-    if (conditionText.includes(condition)) {
-      return YAHOO_CONDITION_RANK_MAP[condition];
-    }
-  }
-  
-  // 何も一致しない場合はデフォルト
-  return "B";
-}
-
-/**
- * メルカリの商品状態をランクに変換
- * @param {string} conditionText - 商品状態テキスト  
- * @return {string} ランク（S, SA, A, B, C, D）
- */
-function convertMercariConditionToRank_(conditionText) {
-  if (!conditionText) return "";
-  
-  // 完全一致を試す
-  if (MERCARI_CONDITION_RANK_MAP[conditionText]) {
-    return MERCARI_CONDITION_RANK_MAP[conditionText];
-  }
-  
-  // 部分一致を試す
-  for (let condition in MERCARI_CONDITION_RANK_MAP) {
-    if (conditionText.includes(condition)) {
-      return MERCARI_CONDITION_RANK_MAP[condition];
-    }
-  }
-  
-  // 何も一致しない場合はデフォルト
-  return "B";
-}
-
-/**
- * 統一ランク変換関数（メイン）
- * @param {string} conditionText - 商品状態テキスト
- * @param {string} siteType - サイト種別
- * @return {string} ランク
- */
-function convertConditionToRank_(conditionText, siteType) {
-  if (siteType === "mercari") {
-    return convertMercariConditionToRank_(conditionText);
-  } else {
-    return convertYahooConditionToRank_(conditionText);
-  }
-}
-
 /**
  * Phase 3のテスト関数
  */
-function testConvertConditionToRank() {
+function testAucfanConvertConditionToRank() {
   console.log("=== Phase 3: ランク変換テスト ===");
   
   // テストケース
@@ -473,7 +486,7 @@ function testConvertConditionToRank() {
   
   for (let i = 0; i < testCases.length; i++) {
     const testCase = testCases[i];
-    const result = convertConditionToRank_(testCase.conditionText, testCase.siteType);
+    const result = auc_convertConditionToRank_(testCase.conditionText, testCase.siteType);
     
     console.log(`テスト${i + 1}:`);
     console.log(`  商品状態: "${testCase.conditionText}"`);
@@ -493,23 +506,23 @@ function debugRankConversion() {
   
   // 直接マッピングをテスト
   console.log("1. マッピング定義の確認:");
-  console.log("YAHOO_CONDITION_RANK_MAP['新品']:", YAHOO_CONDITION_RANK_MAP['新品']);
-  console.log("YAHOO_CONDITION_RANK_MAP['中古']:", YAHOO_CONDITION_RANK_MAP['中古']);
+  console.log("AUC_YAHOO_CONDITION_RANK_MAP['新品']:", AUC_YAHOO_CONDITION_RANK_MAP['新品']);
+  console.log("AUC_YAHOO_CONDITION_RANK_MAP['中古']:", AUC_YAHOO_CONDITION_RANK_MAP['中古']);
   
   // 関数を直接テスト
   console.log("\n2. Yahoo変換関数のテスト:");
-  const yahooResult1 = convertYahooConditionToRank_('新品');
+  const yahooResult1 = auc_convertYahooConditionToRank_('新品');
   console.log("convertYahooConditionToRank_('新品'):", yahooResult1);
   
-  const yahooResult2 = convertYahooConditionToRank_('中古');
+  const yahooResult2 = auc_convertYahooConditionToRank_('中古');
   console.log("convertYahooConditionToRank_('中古'):", yahooResult2);
   
   // 統一関数をテスト
   console.log("\n3. 統一変換関数のテスト:");
-  const unifiedResult1 = convertConditionToRank_('新品', 'yahoo');
+  const unifiedResult1 = auc_convertConditionToRank_('新品', 'yahoo');
   console.log("convertConditionToRank_('新品', 'yahoo'):", unifiedResult1);
   
-  const unifiedResult2 = convertConditionToRank_('中古', 'yahoo');
+  const unifiedResult2 = auc_convertConditionToRank_('中古', 'yahoo');
   console.log("convertConditionToRank_('中古', 'yahoo'):", unifiedResult2);
 }
 
@@ -554,6 +567,7 @@ function testAucfanHtmlFromSheet() {
       );
       console.log("  価格:", items[i].price || "なし");
       console.log("  日付:", items[i].date || "なし");
+      console.log("  ランク:", items[i].rank || "なし"); // 🆕 ランク表示を追加
     }
 
     if (items.length === 0) {
@@ -566,4 +580,23 @@ function testAucfanHtmlFromSheet() {
     console.error("❌ テスト中にエラーが発生:", e.message);
     console.error("スタックトレース:", e.stack);
   }
+}
+
+/**
+ * 🎯 統合テスト：全Phase機能の動作確認
+ */
+function testAucfanAllRankFeatures() {
+  console.log("🎯 ===== ランク機能 統合テスト ===== 🎯");
+  
+  console.log("\n📋 Phase 1: 商品状態抽出テスト");
+  testAucfanExtractConditionText();
+  
+  console.log("\n📋 Phase 2: サイト判定テスト");
+  testAucfanDetectSiteType();
+  
+  console.log("\n📋 Phase 3: ランク変換テスト");
+  testAucfanConvertConditionToRank();
+  
+  console.log("\n🎉 全てのPhaseのテストが完了しました！");
+  console.log("実際のデータでテストするには testAucfanHtmlFromSheet() を実行してください。");
 }
