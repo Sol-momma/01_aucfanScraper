@@ -10,11 +10,18 @@
  */
 function fetchAucfanHtml_(url) {
   try {
+    var cache = CacheService.getScriptCache();
+    var cacheKey = 'auc_html_' + Utilities.base64EncodeWebSafe(url).slice(0, 64);
+    var cached = cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
     var options = getCommonHttpOptions_();
     var response = UrlFetchApp.fetch(url, options);
-
     validateHttpResponse_(response, "オークファン");
-    return getResponseTextWithBestCharset_(response);
+    var text = getResponseTextWithBestCharset_(response);
+    cache.put(cacheKey, text, 300); // 5分キャッシュ
+    return text;
   } catch (e) {
     throw new Error("オークファン URLからのHTMLフェッチエラー: " + e.message);
   }
