@@ -5,6 +5,38 @@
 
 // ===== オークファン スクレイピング =====
 
+// パフォーマンス最適化：事前コンパイル済み正規表現
+const AUC_PRICE_REGEX = {
+  RAKUSATSU_SPAN: /<li class="price"[^>]*>\s*<span[^>]*>落札<\/span>\s*([^<]+)/i,
+  RAKUSATSU_TEXT: /落札価格[:：]?\s*([0-9]{1,3}(?:,[0-9]{3})*)\s*円/i,
+  END_PRICE: /終了価格[:：]?\s*([0-9]{1,3}(?:,[0-9]{3})*)\s*円/i,
+  PRICE_LI: /<li class="price"[^>]*>([\s\S]*?)<\/li>/i,
+  DATA_PRICE: /data-price="([0-9,]+)"/i,
+  PRICE_VALUE: /class="[^"]*price__value[^"]*"[^>]*>\s*([^<]+)/i,
+  YEN_NUM: /([0-9]{1,3}(?:,[0-9]{3})*)\s*円/i,
+  YEN_MARK: /¥\s*([0-9]{1,3}(?:,[0-9]{3})*)/i,
+  LEADING_TEXT: /^\s*([^<]+)/i
+};
+
+const AUC_EXCLUDED_SET = new Set([3980, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]);
+
+const AUC_RANK_REGEX = {
+  YAHOO_STATE: /商品状態[：:\s]*([^<\n]+)/i,
+  MERC_PATTERNS: [
+    /新品、未使用/i, /未使用に近い/i, /目立った傷や汚れなし/i,
+    /やや傷や汚れあり/i, /傷や汚れあり/i, /全体的に状態が悪い/i
+  ]
+};
+
+const AUC_COMMON_REGEX = {
+  ITEM: /<li class="item">\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>/gi,
+  DETAIL_PATH: /<li class="title">[\s\S]*?<a\s+href="([^"]+)"/i,
+  IMAGE: /<img[^>]+class="thumbnail"[^>]+src="([^"]+)"/i,
+  TITLE_ANCHOR: /<li class="itemName">[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i,
+  TITLE_FALLBACK: /<li class="itemName">([\s\S]*?)<\/li>/i,
+  END: /<li class="end">\s*([^<]+)/i
+};
+
 /**
  * オークファンのHTMLを取得
  */
@@ -20,7 +52,11 @@ function fetchAucfanHtml_(url) {
     var response = UrlFetchApp.fetch(url, options);
     validateHttpResponse_(response, "オークファン");
     var text = getResponseTextWithBestCharset_(response);
-    cache.put(cacheKey, text, 300); // 5分キャッシュ
+    if (text && text.length <= 90000) {
+      cache.put(cacheKey, text, 300); // 5分キャッシュ
+    } else {
+      console.warn("HTMLが大きいためキャッシュをスキップ:", text ? text.length + "文字" : 0);
+    }
     return text;
   } catch (e) {
     throw new Error("オークファン URLからのHTMLフェッチエラー: " + e.message);
@@ -31,20 +67,33 @@ function fetchAucfanHtml_(url) {
  * オークファンデータを取得（HTMLまたはURLから）
  */
 function getAucfanDataFromSheetOrUrl_(sheet, urlRow, urlCol) {
+  var t0_total = Date.now(); // 関数全体の開始時間
+  console.log("--- getAucfanDataFromSheetOrUrl_ 全体計測開始 ---");
+
   try {
-    // まず67行目以降にHTMLがあるかチェック
-    var htmlFromSheet = readHtmlFromRow_(sheet, 67);
+    // まず15行目以降にHTMLがあるかチェック
+    var t0_readSheet = Date.now();
+    var htmlFromSheet = readHtmlFromRow_(sheet, 15);
+    var t1_readSheet = Date.now();
+    console.log("  HTMLをシートから読み込み (readHtmlFromRow_):", (t1_readSheet - t0_readSheet) + "ms");
 
     if (htmlFromSheet) {
       // HTMLソースがオークファンかどうかを判定
       var source = detectSource_(htmlFromSheet);
       if (source === "オークファン" || source === "aucfan") {
-        console.log("67行目以降のHTMLからオークファンデータを取得します");
+        console.log("  67行目以降のHTMLからオークファンデータを取得します");
+        var t0_parse = Date.now();
         var items = parseAucfanFromHtml_(htmlFromSheet);
-        console.log("オークファンデータを取得しました:", items.length + "件");
+        var t1_parse = Date.now();
+        console.log("  HTMLパース (parseAucfanFromHtml_):", (t1_parse - t0_parse) + "ms");
+        console.log("  オークファンデータを取得しました:", items.length + "件");
+        
+        var t1_total = Date.now();
+        console.log("--- getAucfanDataFromSheetOrUrl_ 全体計測終了 ---");
+        console.log("  関数全体の処理時間:", (t1_total - t0_total) + "ms");
         return items;
       } else {
-        console.log("67行目以降のHTMLはオークファンではありません:", source);
+        console.log("  67行目以降のHTMLはオークファンではありません:", source);
       }
     }
 
@@ -53,18 +102,35 @@ function getAucfanDataFromSheetOrUrl_(sheet, urlRow, urlCol) {
     if (url && url.toString().trim()) {
       var urlStr = url.toString().trim();
       if (urlStr.startsWith("http")) {
-        console.log("URLからオークファンデータを取得します:", urlStr);
+        console.log("  URLからオークファンデータを取得します:", urlStr);
+        var t0_fetchHtml = Date.now();
         var html = fetchAucfanHtml_(urlStr);
+        var t1_fetchHtml = Date.now();
+        console.log("  URLからHTMLをフェッチ (fetchAucfanHtml_):", (t1_fetchHtml - t0_fetchHtml) + "ms");
+
+        var t0_parse = Date.now();
         var items = parseAucfanFromHtml_(html);
-        console.log("オークファンデータを取得しました:", items.length + "件");
+        var t1_parse = Date.now();
+        console.log("  HTMLパース (parseAucfanFromHtml_):", (t1_parse - t0_parse) + "ms");
+        console.log("  オークファンデータを取得しました:", items.length + "件");
+
+        var t1_total = Date.now();
+        console.log("--- getAucfanDataFromSheetOrUrl_ 全体計測終了 ---");
+        console.log("  関数全体の処理時間:", (t1_total - t0_total) + "ms");
         return items;
       }
     }
 
-    console.log("オークファンのHTMLもURLも見つかりません");
+    console.log("  オークファンのHTMLもURLも見つかりません");
+    var t1_total = Date.now();
+    console.log("--- getAucfanDataFromSheetOrUrl_ 全体計測終了 ---");
+    console.log("  関数全体の処理時間:", (t1_total - t0_total) + "ms");
     return [];
   } catch (e) {
     console.warn("オークファンデータの取得に失敗:", e.message);
+    var t1_total = Date.now();
+    console.log("--- getAucfanDataFromSheetOrUrl_ 全体計測終了 (エラー発生) ---");
+    console.log("  関数全体の処理時間:", (t1_total - t0_total) + "ms");
     return [];
   }
 }
@@ -73,36 +139,18 @@ function getAucfanDataFromSheetOrUrl_(sheet, urlRow, urlCol) {
 // ===== 商品ランク機能（Aucfan専用・プレフィックス付きで衝突回避） =====
 
 /**
- * Phase 1: 商品状態のテキストを抽出
+ * Phase 1: 商品状態のテキストを抽出（最適化版）
  * @param {string} htmlBlock 商品ブロックのHTML
  * @returns {string} 商品状態テキスト（例: "中古", "目立った傷や汚れなし"）
  */
 function auc_extractConditionText_(htmlBlock) {
-  // ヤフオクパターン: "商品状態 中古" のような形式
-  const yahooPattern = /商品状態[：:\s]*([^<\n]+)/i;
-  const yahooMatch = htmlBlock.match(yahooPattern);
-  if (yahooMatch) {
-    return yahooMatch[1].trim();
+  const m = htmlBlock.match(AUC_RANK_REGEX.YAHOO_STATE);
+  if (m) return m[1].trim();
+  
+  for (let i = 0; i < AUC_RANK_REGEX.MERC_PATTERNS.length; i++) {
+    const match = htmlBlock.match(AUC_RANK_REGEX.MERC_PATTERNS[i]);
+    if (match) return match[0];
   }
-  
-  // メルカリパターン: 状態を直接記載
-  const mercariPatterns = [
-    /新品、未使用/i,
-    /未使用に近い/i,
-    /目立った傷や汚れなし/i,
-    /やや傷や汚れあり/i,
-    /傷や汚れあり/i,
-    /全体的に状態が悪い/i
-  ];
-  
-  for (let pattern of mercariPatterns) {
-    const match = htmlBlock.match(pattern);
-    if (match) {
-      return match[0];
-    }
-  }
-  
-  // 何も見つからない場合
   return "";
 }
 
@@ -246,153 +294,104 @@ function auc_convertConditionToRank_(conditionText, siteType) {
  * オークファンのHTMLをパースして商品情報を抽出
  */
 function parseAucfanFromHtml_(html) {
+  var t0 = Date.now();
   const items = [];
   const base = "https://pro.aucfan.com";
-  const re = /<li class="item">\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>/gi;
+  
+  AUC_COMMON_REGEX.ITEM.lastIndex = 0;
   let m;
+  var itemCount = 0;
+  var timeBreakdown = { detail: 0, image: 0, title: 0, price: 0, end: 0, rank: 0, create: 0 };
 
-  while ((m = re.exec(html)) !== null) {
+  while ((m = AUC_COMMON_REGEX.ITEM.exec(html)) !== null) {
+    itemCount++;
     const block = m[1];
 
     // 詳細URL
-    const detailPath = firstMatch_(
-      block,
-      /<li class="title">[\s\S]*?<a\s+href="([^"]+)"/i
-    );
+    var t1 = Date.now();
+    const detailPath = firstMatch_(block, AUC_COMMON_REGEX.DETAIL_PATH);
     const detailUrl = detailPath
-      ? detailPath.startsWith("http")
-        ? detailPath
-        : base + detailPath
+      ? (detailPath.startsWith("http") ? detailPath : base + detailPath)
       : "";
+    timeBreakdown.detail += Date.now() - t1;
 
     // 画像URL
-    const imageUrl = firstMatch_(
-      block,
-      /<img[^>]+class="thumbnail"[^>]+src="([^"]+)"/i
-    );
+    t1 = Date.now();
+    const imageUrl = firstMatch_(block, AUC_COMMON_REGEX.IMAGE);
+    timeBreakdown.image += Date.now() - t1;
 
-    // タイトル抽出（複数パターンに対応）
+    // タイトル抽出（軽量化版）
+    t1 = Date.now();
     let title = "";
-    const titleHtmlItemName = firstMatch_(
-      block,
-      /<li class="itemName">[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i
-    );
-    if (titleHtmlItemName) {
-      title = stripTags_(htmlDecode_(titleHtmlItemName))
+    const titleRaw = firstMatch_(block, AUC_COMMON_REGEX.TITLE_ANCHOR) ||
+                     firstMatch_(block, AUC_COMMON_REGEX.TITLE_FALLBACK);
+
+    if (titleRaw) {
+      // htmlDecode → stripTags → 正規化を1回で
+      title = titleRaw
+        .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ")
+        .replace(/<[^>]*>/g, "")
         .replace(/\s+/g, " ")
         .trim();
     }
+    timeBreakdown.title += Date.now() - t1;
 
-    // タイトルが取得できない場合の代替パターン
-    if (!title) {
-      const liItemNameAll = firstMatch_(
-        block,
-        /<li class="itemName">([\s\S]*?)<\/li>/i
-      );
-      if (liItemNameAll) {
-        title = stripTags_(htmlDecode_(liItemNameAll))
-          .replace(/\s+/g, " ")
-          .trim();
-      }
-    }
-
-    // 価格抽出（落札価格を優先）
+    // 価格抽出（最優先＋軽量化版）
+    t1 = Date.now();
     let price = "";
 
-    // まず落札価格を探す（落札価格を優先）
-    // パターン1: <span>落札</span>の後の価格
-    let endPrice = firstMatch_(
-      block,
-      /<li class="price"[^>]*>\s*<span[^>]*>落札<\/span>\s*([^<]+)/i
-    );
-
-    // パターン2: 落札価格として明記されている場合
-    if (!endPrice) {
-      endPrice = firstMatch_(
-        block,
-        /落札価格[:：]?\s*([0-9]{1,3}(?:,[0-9]{3})*)\s*円/i
-      );
-    }
-
-    // パターン3: 終了価格として表示されている場合
-    if (!endPrice) {
-      endPrice = firstMatch_(
-        block,
-        /終了価格[:：]?\s*([0-9]{1,3}(?:,[0-9]{3})*)\s*円/i
-      );
-    }
+    // 落札価格を最優先（見つかったら即終了）
+    let endPrice = firstMatch_(block, AUC_PRICE_REGEX.RAKUSATSU_SPAN) ||
+                   firstMatch_(block, AUC_PRICE_REGEX.RAKUSATSU_TEXT) ||
+                   firstMatch_(block, AUC_PRICE_REGEX.END_PRICE);
 
     if (endPrice) {
-      // 落札価格が見つかった場合はそれを使用
-      const normalizedEndPrice = normalizeNumber_(endPrice);
-      if (normalizedEndPrice && normalizedEndPrice !== "0") {
-        price = normalizedEndPrice;
+      const normalized = normalizeNumber_(endPrice);
+      if (normalized && normalized !== "0") {
+        price = normalized;
       }
     }
 
-    // 落札価格が見つからない場合は、既存の価格抽出ロジックを使用
+    // 落札価格が見つからない場合のみ、軽量候補探索
     if (!price) {
-      const priceCandidates = [];
-      const pricePrimary = firstMatch_(
-        block,
-        /<li class="price"[^>]*>\s*([^<]+)/i
-      );
-      if (pricePrimary) priceCandidates.push(pricePrimary);
+      const priceLi = firstMatch_(block, AUC_PRICE_REGEX.PRICE_LI);
+      const area = priceLi || block;
+      let min = Number.POSITIVE_INFINITY;
 
-      const dataPrice = firstMatch_(block, /data-price="([0-9,]+)"/i);
-      if (dataPrice) priceCandidates.push(dataPrice);
+      // 軽い順に候補をチェック（見つかり次第最小更新）
+      [
+        firstMatch_(area, AUC_PRICE_REGEX.DATA_PRICE),
+        firstMatch_(area, AUC_PRICE_REGEX.PRICE_VALUE),
+        firstMatch_(area, AUC_PRICE_REGEX.YEN_NUM),
+        firstMatch_(area, AUC_PRICE_REGEX.YEN_MARK),
+        priceLi ? firstMatch_(area, AUC_PRICE_REGEX.LEADING_TEXT) : null
+      ].forEach(function(candidate) {
+        if (!candidate) return;
+        const nStr = normalizeNumber_(candidate);
+        if (!nStr || nStr === "0") return;
+        const n = parseInt(nStr, 10);
+        if (isNaN(n) || n < 100 || AUC_EXCLUDED_SET.has(n)) return;
+        if (n < min) min = n;
+      });
 
-      const priceValue = firstMatch_(
-        block,
-        /class="[^"]*price__value[^"]*"[^>]*>\s*([^<]+)/i
-      );
-      if (priceValue) priceCandidates.push(priceValue);
-
-      const yenInline = firstMatch_(block, /([0-9]{1,3}(?:,[0-9]{3})*)\s*円/i);
-      if (yenInline) priceCandidates.push(yenInline);
-
-      const yenMark = firstMatch_(block, /¥\s*([0-9]{1,3}(?:,[0-9]{3})*)/i);
-      if (yenMark) priceCandidates.push(yenMark);
-
-      const nums = priceCandidates
-        .map(function (p) {
-          return normalizeNumber_(p);
-        })
-        .filter(function (n) {
-          return n && n !== "0";
-        })
-        .map(function (n) {
-          return parseInt(n, 10);
-        })
-        .filter(function (n) {
-          return !isNaN(n) && n >= 100;
-        });
-
-      if (nums.length > 0) {
-        // 明らかに送料や手数料と思われる金額を除外
-        var filtered = nums.filter(function (n) {
-          return (
-            [
-              3980, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000,
-            ].indexOf(n) === -1
-          );
-        });
-        var candidates = filtered.length > 0 ? filtered : nums;
-        candidates.sort(function (a, b) {
-          return a - b;
-        });
-        price = String(candidates[0]);
-      }
+      if (isFinite(min)) price = String(min);
     }
+    timeBreakdown.price += Date.now() - t1;
 
     // 終了日
-    const endTxt = firstMatch_(block, /<li class="end">\s*([^<]+)/i);
+    t1 = Date.now();
+    const endTxt = firstMatch_(block, AUC_COMMON_REGEX.END);
+    timeBreakdown.end += Date.now() - t1;
 
-    // 🆕 商品状態抽出とランク変換
+    // 商品状態抽出とランク変換
+    t1 = Date.now();
     const conditionText = auc_extractConditionText_(block);
     const siteType = auc_detectSiteType_(block);
     const rank = auc_convertConditionToRank_(conditionText, siteType) || "B";
+    timeBreakdown.rank += Date.now() - t1;
 
+    t1 = Date.now();
     if (detailUrl || imageUrl || price || endTxt || title) {
       items.push(
         createItemData_({
@@ -400,7 +399,7 @@ function parseAucfanFromHtml_(html) {
           detailUrl: detailUrl,
           imageUrl: imageUrl,
           date: endTxt || "",
-          rank: rank, // 🆕 ここが変わる！
+          rank: rank,
           price: price || "",
           shop: "",
           source: "オークファン",
@@ -408,7 +407,22 @@ function parseAucfanFromHtml_(html) {
         })
       );
     }
+    timeBreakdown.create += Date.now() - t1;
   }
+
+  var totalTime = Date.now() - t0;
+  console.log("=== parseAucfanFromHtml_ パフォーマンス分析（最適化後） ===");
+  console.log("総処理時間:", totalTime + "ms");
+  console.log("処理アイテム数:", itemCount + "件");
+  console.log("1件あたり平均:", Math.round(totalTime / Math.max(itemCount, 1)) + "ms");
+  console.log("時間内訳:");
+  console.log("  詳細URL:", timeBreakdown.detail + "ms (" + Math.round(timeBreakdown.detail / totalTime * 100) + "%)");
+  console.log("  画像URL:", timeBreakdown.image + "ms (" + Math.round(timeBreakdown.image / totalTime * 100) + "%)");
+  console.log("  タイトル:", timeBreakdown.title + "ms (" + Math.round(timeBreakdown.title / totalTime * 100) + "%)");
+  console.log("  価格抽出:", timeBreakdown.price + "ms (" + Math.round(timeBreakdown.price / totalTime * 100) + "%)");
+  console.log("  終了日:", timeBreakdown.end + "ms (" + Math.round(timeBreakdown.end / totalTime * 100) + "%)");
+  console.log("  ランク:", timeBreakdown.rank + "ms (" + Math.round(timeBreakdown.rank / totalTime * 100) + "%)");
+  console.log("  オブジェクト作成:", timeBreakdown.create + "ms (" + Math.round(timeBreakdown.create / totalTime * 100) + "%)");
 
   return items;
 }
@@ -490,7 +504,7 @@ function testAucfanConvertConditionToRank() {
     { conditionText: '目立った傷や汚れなし', siteType: 'mercari', expected: 'A' },
     { conditionText: 'やや傷や汚れあり', siteType: 'mercari', expected: 'B' },
     
-    { conditionText: '', siteType: 'yahoo', expected: '' },
+    { conditionText: '', siteType: 'yahoo', expected: 'B' },
     { conditionText: '不明な状態', siteType: 'yahoo', expected: 'B' }
   ];
   
@@ -508,57 +522,35 @@ function testAucfanConvertConditionToRank() {
   }
 }
 
-// （内部検証用のデバッグ関数は削除しました）
-
 /**
  * オークファンHTML読み取りテスト関数
  */
 function testAucfanHtmlFromSheet() {
-  console.log("=== オークファンHTML読み取りテスト ===");
+  console.log("=== オークファンHTML読み取りテスト (getAucfanDataFromSheetOrUrl_経由) ===");
 
   try {
     var sheet = SpreadsheetApp.getActiveSheet();
+    
+    // getAucfanDataFromSheetOrUrl_ を呼び出して全体のフローをテスト
+    var items = getAucfanDataFromSheetOrUrl_(sheet); 
 
-    // 67行目以降のHTMLを読み取り
-    var htmlFromSheet = readHtmlFromRow_(sheet, 67);
+    if (items && items.length > 0) {
+      console.log("✅ パース完了:", items.length + "件の商品を取得");
 
-    if (!htmlFromSheet) {
-      console.log("❌ 67行目以降にHTMLが見つかりません");
-      console.log("B67行目以降にオークファンのHTMLを貼り付けてください");
-      return;
-    }
-
-    console.log("✅ HTMLを読み取りました:", htmlFromSheet.length + "文字");
-
-    // ソース判定
-    var source = detectSource_(htmlFromSheet);
-    console.log("判定されたソース:", source);
-
-    if (source !== "オークファン") {
-      console.log("⚠️ オークファンのHTMLではない可能性があります");
-    }
-
-    // パース実行
-    var items = parseAucfanFromHtml_(htmlFromSheet);
-    console.log("✅ パース完了:", items.length + "件の商品を取得");
-
-    // 最初の3件を表示
-    for (var i = 0; i < Math.min(3, items.length); i++) {
-      console.log("\n商品" + (i + 1) + ":");
-      console.log(
-        "  タイトル:",
-        items[i].title ? items[i].title.substring(0, 50) + "..." : "なし"
-      );
-      console.log("  価格:", items[i].price || "なし");
-      console.log("  日付:", items[i].date || "なし");
-      console.log("  ランク:", items[i].rank || "なし"); // 🆕 ランク表示を追加
-    }
-
-    if (items.length === 0) {
-      console.log("❌ 商品データが取得できませんでした");
-      console.log("HTMLの形式を確認してください");
-    } else {
+      // 最初の3件を表示
+      for (var i = 0; i < Math.min(3, items.length); i++) {
+        console.log("\n商品" + (i + 1) + ":");
+        console.log(
+          "  タイトル:",
+          items[i].title ? items[i].title.substring(0, 50) + "..." : "なし"
+        );
+        console.log("  価格:", items[i].price || "なし");
+        console.log("  日付:", items[i].date || "なし");
+        console.log("  ランク:", items[i].rank || "なし");
+      }
       console.log("\n🎉 テスト成功！");
+    } else {
+      console.log("❌ 商品データが取得できませんでした。ログを確認してください。");
     }
   } catch (e) {
     console.error("❌ テスト中にエラーが発生:", e.message);
