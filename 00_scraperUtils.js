@@ -120,6 +120,22 @@ function htmlDecode_(s) {
       muteHttpExceptions: true,
     };
   }
+
+  // ===== 安全キャッシュ関連 =====
+  var CACHE_TEXT_LIMIT = 90000; // CacheServiceの100KB上限に対する安全マージン
+
+  /**
+   * 文字列が大きすぎる場合はCacheServiceへの保存をスキップ
+   */
+  function putToCacheSafe_(cache, key, text, seconds) {
+    if (!text) return;
+    var str = String(text);
+    if (str.length <= CACHE_TEXT_LIMIT) {
+      cache.put(key, str, seconds || 300);
+    } else {
+      console.warn("HTMLが大きいためキャッシュをスキップ:", str.length + "文字");
+    }
+  }
   
   /**
    * HTTPレスポンスの共通検証
@@ -174,34 +190,49 @@ function htmlDecode_(s) {
    */
   function readHtmlFromRow_(sheet, startRow) {
     if (!startRow) startRow = 67; // デフォルトは67行目から
-  
+
+    var cache = CacheService.getScriptCache();
+    // キャッシュキーにはシート名と開始行を含める
+    var cacheKey = 'html_from_sheet_' + sheet.getName() + '_' + startRow;
+    var cachedHtml = cache.get(cacheKey);
+
+    if (cachedHtml) {
+      console.log("✅ HTMLをキャッシュから読み取りました:", cachedHtml.length + "文字");
+      return cachedHtml;
+    }
+
     var lastRow = sheet.getLastRow();
     if (lastRow < startRow) {
       console.log("B" + startRow + "行目以降にHTMLがありません");
       return "";
     }
-  
+
     var vals = sheet
       .getRange(startRow, 2, lastRow - startRow + 1, 1) // B列から取得
       .getValues()
       .map(function (r) {
         return r[0];
       });
-  
+
     var joined = vals
       .filter(function (v) {
         return v !== "" && v !== null && v !== undefined;
       })
       .join("\n");
-  
+
     if (!joined.trim()) {
       console.log("B" + startRow + "行目以降にHTMLデータが見つかりません");
       return "";
     }
-  
+
     console.log(
       "HTML読み取り完了: " + joined.length + "文字 (B" + startRow + "行目以降)"
     );
-    return joined.trim();
+    
+    // 読み込んだHTMLをキャッシュに保存 (5分間)
+    var result = joined.trim();
+    putToCacheSafe_(cache, cacheKey, result, 300);
+
+    return result;
   }
   
