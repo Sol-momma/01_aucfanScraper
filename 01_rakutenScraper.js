@@ -190,6 +190,72 @@ function fetchRakutenHtml_(url) {
 }
 
 /**
+ * 【新設】楽天スクレイピングのメイン処理（ページネーションと売り切れフィルタリング対応）
+ *
+ * @param {string} baseUrl - ページ番号を含まない楽天の検索URL。
+ * @returns {Array} - 複数ページから収集した「売り切れ」商品のデータ配列。
+ */
+function scrapeRakutenWithPagination_(baseUrl) {
+  var MAX_PAGES = 3; // 最大3ページまで探索
+  var allSoldOutItems = []; // 全てのページから集めた売り切れ商品を格納する配列
+
+  console.log("楽天スクレイピング開始 (最大" + MAX_PAGES + "ページ)");
+  console.log("ベースURL:", baseUrl);
+
+  for (var page = 1; page <= MAX_PAGES; page++) {
+    // ページ番号をURLに追加（既にあれば置換、なければ追加）
+    var targetUrl = "";
+    if (baseUrl.indexOf("&p=") !== -1) {
+      targetUrl = baseUrl.replace(/&p=\d+/, "&p=" + page);
+    } else {
+      targetUrl = baseUrl + "&p=" + page;
+    }
+
+    console.log(page + "ページ目の処理を開始: " + targetUrl);
+
+    try {
+      // 1. HTMLを取得
+      var html = fetchRakutenHtml_(targetUrl);
+      if (!html) {
+        console.log(page + "ページ目のHTML取得に失敗しました。");
+        continue; // 次のページの処理へ
+      }
+
+      // 2. HTMLから全商品情報をパース
+      var allItemsOnPage = parseRakutenFromHtml_(html);
+      console.log(page + "ページ目から " + allItemsOnPage.length + "件の商品を検出しました。");
+
+      // ページに商品が一つもなければ、それ以降のページもないと判断してループを終了
+      if (allItemsOnPage.length === 0) {
+        console.log("商品が検出されなかったため、処理を早期終了します。");
+        break;
+      }
+
+      // 3. 「売り切れ」の商品のみをフィルタリング
+      var soldOutItemsOnPage = allItemsOnPage.filter(function (item) {
+        return item.soldOut === true;
+      });
+
+      console.log("うち、売り切れ商品は " + soldOutItemsOnPage.length + "件でした。");
+
+      // 4. ページ内で見つかった売り切れ商品を全体のリストに追加
+      if (soldOutItemsOnPage.length > 0) {
+        allSoldOutItems = allSoldOutItems.concat(soldOutItemsOnPage);
+      }
+
+      // サーバーに負荷をかけすぎないための待機時間（推奨）
+      Utilities.sleep(1000); // 1秒待機
+    } catch (e) {
+      console.log(page + "ページ目の処理中にエラーが発生しました: " + e.message);
+      // エラーが発生しても次のページの処理は試みる
+    }
+  }
+
+  console.log("全ページ探索完了。合計 " + allSoldOutItems.length + "件の売り切れ商品が見つかりました。");
+  return allSoldOutItems;
+}
+
+/**
  * 楽天の商品ブロックから商品情報を抽出
  */
 function extractRakutenItemFromBlock_(block, detailUrl, index) {

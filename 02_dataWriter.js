@@ -1195,25 +1195,43 @@ function getRakutenData_(sheet) {
     var siteConfig = getSiteConfig_("rakuten");
     var urlPosition = getSiteUrlPosition_("rakuten");
 
-    return getSiteData_(sheet, {
-      siteName: siteConfig.name,
-      urlRow: urlPosition.row,
-      urlCol: urlPosition.col,
-      fetchFunction: fetchRakutenHtml_,
-      parseFunction: parseRakutenFromHtml_,
-    });
+    // URL取得
+    var url = sheet.getRange(urlPosition.row, urlPosition.col).getValue();
+    if (!url || String(url).trim() === "") {
+      console.log("楽天のURLが設定されていません");
+      return [];
+    }
+
+    var urlStr = String(url).trim();
+    if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) {
+      console.error("楽天の無効なURL: " + urlStr);
+      return [];
+    }
+
+    console.log("楽天（ページネーション対応）データ取得開始: " + urlStr);
+    // ページネーション + 売り切れフィルタリング
+    var soldOutItems = scrapeRakutenWithPagination_(urlStr);
+    console.log("楽天（ページネーション対応）取得完了: " + soldOutItems.length + "件");
+    return soldOutItems;
   } catch (e) {
     console.warn(
       "楽天設定値読み取りエラー、フォールバック値を使用:",
       e.message
     );
-    return getSiteData_(sheet, {
-      siteName: "楽天",
-      urlRow: 30,
-      urlCol: 2,
-      fetchFunction: fetchRakutenHtml_,
-      parseFunction: parseRakutenFromHtml_,
-    });
+    // フォールバック: B30からURLを取得してページネーション処理
+    try {
+      var fallbackUrl = sheet.getRange(30, 2).getValue();
+      var urlStr = String(fallbackUrl || "").trim();
+      if (!urlStr || (!urlStr.startsWith("http://") && !urlStr.startsWith("https://"))) {
+        console.error("楽天フォールバックURLが無効です");
+        return [];
+      }
+      console.log("楽天（フォールバック・ページネーション）開始: " + urlStr);
+      return scrapeRakutenWithPagination_(urlStr);
+    } catch (ee) {
+      console.error("楽天フォールバック処理エラー:", ee.message);
+      return [];
+    }
   }
 }
 
