@@ -87,3 +87,4 @@ function logInfo_(functionName, message, details) {
 function logWarning_(functionName, message, details) {
   logError_(functionName, "WARNING", message, details);
 }
+
